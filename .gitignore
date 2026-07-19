@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+
+# contracts
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+
+# indexer runtime data — never commit the local db
+indexer/ascent.db*
+
+# local test/dev artifacts
+deploy_test.sh
