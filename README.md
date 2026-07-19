@@ -201,20 +201,36 @@ git push -u origin main
 
 ### 3. Connect Railway to that repo (the normal way, via the dashboard)
 
-Railway builds directly from the Dockerfile in each service folder — no
-config beyond pointing it at the right subdirectory. `railway.json` files
-are already committed in both `indexer/` and `web/` so Railway knows to use
-the Dockerfile and, for the indexer, where the health check lives.
+**Important, learned the hard way:** Railway does *not* auto-discover
+`railway.json` inside a subdirectory just because you set Root Directory to
+that subdirectory. Per Railway's own docs, config-as-code file discovery
+does not follow the Root Directory setting — by default Railway only looks
+for `railway.json`/`railway.toml` at the actual repo root. A `railway.json`
+sitting in `indexer/` or `web/` is invisible to Railway unless you either
+point at it explicitly (Settings → Custom Config File → `indexer/railway.json`
+or `web/railway.json`, repo-root-relative) or skip config-as-code for the
+builder choice entirely and set it directly in the dashboard, which is the
+more reliable option and what's below. `railway.json` files are still
+committed in both folders — set the Custom Config File path if you want
+Railway to pick up the health check settings from them too, but the Builder
+dropdown alone is enough to fix a build that's running Railpack/Nixpacks
+instead of your Dockerfile.
 
 **Indexer service:**
 1. Railway dashboard → New Project → Deploy from GitHub repo → select this repo.
-2. Settings → Root Directory → `indexer`.
-3. Variables: set `RPC_URL`, `FACTORY_ADDRESS` (from step 1), `VIRTUAL_ETH`,
+2. Settings → Source → Root Directory → `indexer`.
+3. Settings → Build → Builder → **Dockerfile** (don't leave this on the
+   default — that's what silently produces a generic Railpack build
+   failure with no useful error, regardless of any railway.json present).
+4. Variables: set `RPC_URL`, `FACTORY_ADDRESS` (from step 1), `VIRTUAL_ETH`,
    `GRADUATION_ETH`, `DB_PATH=/data/ascent.db` — see `indexer/.env.example`.
-4. Settings → Volumes → add a volume mounted at `/data` (SQLite needs a
+5. Settings → Volumes → add a volume mounted at `/data` (SQLite needs a
    persistent disk, or the token history resets on every redeploy).
-5. Deploy, then Settings → Networking → Generate Domain. Note the URL.
-6. All of these are genuinely live-adjustable afterwards: change a Variable,
+6. Deploy, then Settings → Networking → Generate Domain. Note the URL.
+7. Settings → Deploy → Healthcheck Path → `/health` (same caveat as the
+   Builder setting — don't assume `railway.json` is supplying this
+   automatically; set it directly).
+8. All of these are genuinely live-adjustable afterwards: change a Variable,
    Railway restarts the service, the new value takes effect immediately —
    including `FACTORY_ADDRESS`. Pointing the indexer at a different,
    redeployed factory is explicitly handled: the indexer detects the change
@@ -224,10 +240,12 @@ the Dockerfile and, for the indexer, where the health check lives.
 
 **Web service:**
 1. Same repo, new service → Root Directory → `web`.
-2. Variables: `VITE_FACTORY_ADDRESS`, `VITE_API_URL` (the indexer domain
+2. Settings → Build → Builder → **Dockerfile** (same note as above — this
+   is a separate setting from Root Directory and from `railway.json`).
+3. Variables: `VITE_FACTORY_ADDRESS`, `VITE_API_URL` (the indexer domain
    from above), `VITE_CHAIN_ID`, `VITE_CHAIN_NAME`, `VITE_RPC_URL`,
    `VITE_NATIVE_SYMBOL`, `VITE_CREATION_FEE` — see `web/.env.example`.
-3. Deploy, then generate a domain the same way.
+4. Deploy, then generate a domain the same way.
 
 **These web variables are true runtime configuration, not Docker build
 args.** A small entrypoint script (`web/docker-entrypoint.sh`) regenerates
@@ -248,17 +266,33 @@ Dockerfiles were verified in this environment by running their exact build
 steps (`npm ci`, then the production build) against a clean clone of this
 same repository, so what Railway runs is what was tested.
 
-### Troubleshooting: "railpack process exited with an error" / Metal builder
+### Troubleshooting: "railpack process exited with an error"
 
-This is a known, currently-active Railway platform issue, not something
-wrong with this repo — multiple people report the same generic failure with
-no useful detail in the build log, on Railway's newer "Metal builder"
-infrastructure, independent of what's actually being built. Fix: Settings →
-Build → turn off Metal builder for the service, then redeploy. If it
-persists, double check Root Directory is actually set (`indexer` or `web`,
-not blank) — a blank Root Directory on a monorepo makes Railway fall back to
-auto-detecting the whole repo, which produces exactly this kind of opaque
-error since it can't find a single buildable thing at the root.
+If you see this — especially if it mentions **"railpack"** by name, and
+especially if it persists across multiple deploy attempts — it almost
+certainly means Railway isn't using this repo's Dockerfile at all, despite
+`railway.json` being present. Root Directory does not make Railway
+auto-discover a `railway.json` inside that subdirectory (confirmed in
+Railway's own monorepo docs: "The Railway Config File does not follow the
+Root Directory path"). With no config file found at the actual repo root,
+Railway silently falls back to Railpack auto-detection on whatever
+directory it *is* looking at, which fails with exactly this generic message
+since a subdirectory with a Dockerfile doesn't look like anything Railpack
+knows how to build on its own.
+
+**Fix:** Settings → Build → Builder → set it to **Dockerfile** directly in
+the dashboard for that service. This bypasses config-file discovery
+entirely and was enough to resolve this in testing. If you'd rather rely on
+`railway.json` (it also sets the indexer's health check path), use Settings
+→ Custom Config File and give the repo-root-relative path explicitly —
+`indexer/railway.json` or `web/railway.json` — rather than assuming it's
+picked up automatically.
+
+Separately, and worth ruling out if the above doesn't fix it: Railway's
+newer "Metal builder" infrastructure has its own independent history of
+generic build failures unrelated to what's being built — Settings → Build →
+turn it off and redeploy if switching the Builder to Dockerfile doesn't
+resolve things on its own.
 
 ### The alternative: one script, no dashboard clicking
 
@@ -270,6 +304,14 @@ run it. Its contract-deploy step was run against a live local chain during
 development and confirmed working; the Railway CLI steps use verified
 command syntax but need your own account to authenticate, so they could not
 be executed inside this build environment.
+
+Worth knowing given the Railpack troubleshooting note above: `railway up`
+runs from inside `indexer/` or `web/` and uploads that directory directly as
+the build context, with the Dockerfile sitting right at its root — there's
+no Root Directory subdirectory-selection step involved at all, so this path
+isn't exposed to the same config-discovery gap the dashboard GitHub-connect
+flow hit. If the dashboard route keeps fighting you, this script sidesteps
+the whole problem.
 
 ### Local development
 
