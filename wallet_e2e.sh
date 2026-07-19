@@ -60,10 +60,11 @@ sleep 4
 curl -s --max-time 3 localhost:3001/health > /dev/null && echo "== indexer up"
 
 cd $ROOT/web
+npm run build > /tmp/webbuild.log 2>&1 || { cat /tmp/webbuild.log; exit 1; }
 VITE_FACTORY_ADDRESS=$FACTORY VITE_API_URL=http://localhost:3001 \
   VITE_CHAIN_ID=31337 VITE_CHAIN_NAME=Local VITE_RPC_URL=$RPC \
   VITE_NATIVE_SYMBOL=ETH VITE_CREATION_FEE=0.0005 \
-  npm run build > /tmp/webbuild.log 2>&1 || { cat /tmp/webbuild.log; exit 1; }
+  $ROOT/gen_web_config.sh dist
 python3 $ROOT/spa_server.py dist 4173 > /tmp/webserve.log 2>&1 &
 WEB_PID=$!
 sleep 2

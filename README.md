@@ -162,8 +162,13 @@ web/         Vite + React + wagmi app — explore, token pages with candle
 e2e.sh       full stack integration test against a local anvil chain
 qa_run.sh    full stack boot + seeded data + real headless browser screenshots
              of every page (explore, active token, graduated token, create)
-wallet_e2e.sh  the real test: clicks Connect/Buy/Sell/Launch through a mock
-               wallet provider and checks on-chain ground truth
+wallet_e2e.sh  the real test: clicks Connect/Buy/Sell/Launch/Comment through
+               a mock wallet provider and checks on-chain ground truth
+test_factory_switch.sh  verifies changing FACTORY_ADDRESS mid-flight resets
+                         indexer state cleanly instead of mixing two factories
+gen_web_config.sh  test-harness copy of web/docker-entrypoint.sh's config
+                    generation, so qa_run.sh/wallet_e2e.sh exercise the exact
+                    mechanism Railway uses without needing Docker in CI
 spa_server.py  SPA-aware static server used by qa_run.sh, mirrors nginx.conf
 ```
 
@@ -209,19 +214,51 @@ the Dockerfile and, for the indexer, where the health check lives.
 4. Settings → Volumes → add a volume mounted at `/data` (SQLite needs a
    persistent disk, or the token history resets on every redeploy).
 5. Deploy, then Settings → Networking → Generate Domain. Note the URL.
+6. All of these are genuinely live-adjustable afterwards: change a Variable,
+   Railway restarts the service, the new value takes effect immediately —
+   including `FACTORY_ADDRESS`. Pointing the indexer at a different,
+   redeployed factory is explicitly handled: the indexer detects the change
+   on startup and resets its indexed state instead of silently mixing data
+   from two different contracts. See `test_factory_switch.sh` for the
+   verification of this.
 
 **Web service:**
 1. Same repo, new service → Root Directory → `web`.
-2. Variables (these are Docker build args — see `web/Dockerfile` and
-   `web/.env.example`): `VITE_FACTORY_ADDRESS`, `VITE_API_URL` (the indexer
-   domain from above), `VITE_CHAIN_ID`, `VITE_CHAIN_NAME`, `VITE_RPC_URL`,
-   `VITE_NATIVE_SYMBOL`, `VITE_CREATION_FEE`.
+2. Variables: `VITE_FACTORY_ADDRESS`, `VITE_API_URL` (the indexer domain
+   from above), `VITE_CHAIN_ID`, `VITE_CHAIN_NAME`, `VITE_RPC_URL`,
+   `VITE_NATIVE_SYMBOL`, `VITE_CREATION_FEE` — see `web/.env.example`.
 3. Deploy, then generate a domain the same way.
+
+**These web variables are true runtime configuration, not Docker build
+args.** A small entrypoint script (`web/docker-entrypoint.sh`) regenerates
+`config.js` from the container's live environment variables every time it
+starts, before nginx serves anything — the app reads `window.__ASCENT_CONFIG__`
+from that file in preference to anything baked in at build time. Practically:
+change any `VITE_*` variable in the Railway dashboard afterwards and hit
+**Restart** (not redeploy) — it takes effect in seconds, no rebuild needed.
+This was a real gap in an earlier version of this repo (variables were
+Docker build args, meaning a "quick" config change silently required a full
+rebuild) and is now fixed and verified: built once, then proved that
+changing the variables and only restarting — never rebuilding — changes
+what the running app actually uses, checked in a real browser reading
+`window.__ASCENT_CONFIG__` directly.
 
 That's the whole path: push, connect, fill in variables, deploy. Both
 Dockerfiles were verified in this environment by running their exact build
 steps (`npm ci`, then the production build) against a clean clone of this
 same repository, so what Railway runs is what was tested.
+
+### Troubleshooting: "railpack process exited with an error" / Metal builder
+
+This is a known, currently-active Railway platform issue, not something
+wrong with this repo — multiple people report the same generic failure with
+no useful detail in the build log, on Railway's newer "Metal builder"
+infrastructure, independent of what's actually being built. Fix: Settings →
+Build → turn off Metal builder for the service, then redeploy. If it
+persists, double check Root Directory is actually set (`indexer` or `web`,
+not blank) — a blank Root Directory on a monorepo makes Railway fall back to
+auto-detecting the whole repo, which produces exactly this kind of opaque
+error since it can't find a single buildable thing at the root.
 
 ### The alternative: one script, no dashboard clicking
 
