@@ -1,0 +1,14 @@
+.git
+.tmp-shots
+node_modules
+dist
+**/node_modules
+**/dist
+**/*.log
+**/.env
+**/.env.local
+**/.npm-cache
+contracts/out
+contracts/cache
+contracts/broadcast
+indexer/ascent.db*
